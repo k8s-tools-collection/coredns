@@ -47,6 +47,7 @@ type (
 	//
 	// Otherwise, return values should be propagated down the plugin
 	// chain by returning them unchanged.
+	// coredns 每个插件都要实现 Plugin Handler 接口,Name() 返回插件名, ServeDNS() 用来处理域名查询
 	Handler interface {
 		ServeDNS(context.Context, dns.ResponseWriter, *dns.Msg) (int, error)
 		Name() string

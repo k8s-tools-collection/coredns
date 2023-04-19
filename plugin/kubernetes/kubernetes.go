@@ -134,6 +134,7 @@ func (k *Kubernetes) Services(ctx context.Context, state request.Request, exact 
 		return svcs, nil
 	}
 
+	// 处理默认的 ns 的 域名
 	if isDefaultNS(state.Name(), state.Zone) {
 		nss := k.nsAddrs(false, false, state.Zone)
 		var svcs []msg.Service
@@ -149,6 +150,7 @@ func (k *Kubernetes) Services(ctx context.Context, state request.Request, exact 
 		return svcs, nil
 	}
 
+	// 处理域名解析
 	s, e := k.Records(ctx, state, false)
 
 	// SRV for external services is not yet implemented, so remove those records.
@@ -374,6 +376,7 @@ func (k *Kubernetes) endpointSliceSupported(kubeClient *kubernetes.Clientset) (b
 }
 
 // Records looks up services in kubernetes.
+// 从域名的特征判断请求域名是 pod 还是 svc 字符串.
 func (k *Kubernetes) Records(ctx context.Context, state request.Request, exact bool) ([]msg.Service, error) {
 	r, e := parseRequest(state.Name(), state.Zone)
 	if e != nil {
@@ -387,15 +390,19 @@ func (k *Kubernetes) Records(ctx context.Context, state request.Request, exact b
 		return nil, errNoItems
 	}
 
+	// 给 namespace 是否合法
 	if !k.namespaceExposed(r.namespace) {
 		return nil, errNsNotExposed
 	}
 
+	// 请求的域名有 pod 特征, 则使用 findPods 来处理 
 	if r.podOrSvc == Pod {
+		// pod
 		pods, err := k.findPods(r, state.Zone)
 		return pods, err
 	}
 
+	// 其他情况, 则使用 findServices 来处理 
 	services, err := k.findServices(r, state.Zone)
 	return services, err
 }
@@ -416,16 +423,18 @@ func endpointHostname(addr object.EndpointAddress, endpointNameMode bool) string
 	return ""
 }
 
+// 处理 podname 的域名解析的方法
 func (k *Kubernetes) findPods(r recordRequest, zone string) (pods []msg.Service, err error) {
 	if k.podMode == podModeDisabled {
 		return nil, errNoItems
 	}
 
 	namespace := r.namespace
+	// 判断 namespace 是否合法
 	if !k.namespaceExposed(namespace) {
 		return nil, errNoItems
 	}
-
+	// 这里的服务名是 podname
 	podname := r.service
 
 	// handle empty pod name
@@ -440,6 +449,7 @@ func (k *Kubernetes) findPods(r recordRequest, zone string) (pods []msg.Service,
 
 	zonePath := msg.Path(zone, coredns)
 	ip := ""
+	// 把 podname 中的 `-` 符号映射到 `.` 或者 `:` 符号.
 	if strings.Count(podname, "-") == 3 && !strings.Contains(podname, "--") {
 		ip = strings.ReplaceAll(podname, "-", ".")
 	} else {
@@ -462,6 +472,7 @@ func (k *Kubernetes) findPods(r recordRequest, zone string) (pods []msg.Service,
 	// PodModeVerified
 	err = errNoItems
 
+	// 调用 dnscontroller 内的 `podLister.ByIndex` 从缓存中检索匹配的 pod 对象.
 	for _, p := range k.APIConn.PodIndex(ip) {
 		// check for matching ip and namespace
 		if ip == p.PodIP && match(namespace, p.Namespace) {
@@ -475,12 +486,15 @@ func (k *Kubernetes) findPods(r recordRequest, zone string) (pods []msg.Service,
 }
 
 // findServices returns the services matching r from the cache.
+// 查询 service 对应的地址,从 informer 的缓存中获取服务名对应的 service 列表, 
+// 然后进行遍历处理. 当 service 类型为 ServiceTypeExternalName 时, 返回 ExternalName 值做 CNAME 处理.
 func (k *Kubernetes) findServices(r recordRequest, zone string) (services []msg.Service, err error) {
 	if !k.namespaceExposed(r.namespace) {
 		return nil, errNoItems
 	}
 
 	// handle empty service name
+	// service 为空则直接跳出
 	if r.service == "" {
 		if k.namespaceExposed(r.namespace) {
 			// NODATA
@@ -490,6 +504,7 @@ func (k *Kubernetes) findServices(r recordRequest, zone string) (services []msg.
 		return nil, errNoItems
 	}
 
+	// 默认为 error 为无记录
 	err = errNoItems
 
 	var (
@@ -498,12 +513,16 @@ func (k *Kubernetes) findServices(r recordRequest, zone string) (services []msg.
 		serviceList       []*object.Service
 	)
 
+	// 拼凑域名格式为 servicename.namespace
 	idx := object.ServiceKey(r.service, r.namespace)
+	// 通过 dnsController 的 svcLister.ByIndex 从缓存中获取 serviceList 列表
 	serviceList = k.APIConn.SvcIndex(idx)
 	endpointsListFunc = func() []*object.Endpoints { return k.APIConn.EpIndex(idx) }
 
+	// 转换下格式, 比如 service.staging.van.local. 转成 /van/local/skydns/staging/service .
 	zonePath := msg.Path(zone, coredns)
 	for _, svc := range serviceList {
+		// 如果 namespace 不一致, 且service不一致, 则忽略.
 		if !(match(r.namespace, svc.Namespace) && match(r.service, svc.Name)) {
 			continue
 		}
@@ -524,6 +543,7 @@ func (k *Kubernetes) findServices(r recordRequest, zone string) (services []msg.
 		}
 
 		// External service
+		// 如果 service 有绑定 ExternalName, 则需要返回 CNAME 记录.
 		if svc.Type == api.ServiceTypeExternalName {
 			//External services cannot have endpoints, so skip this service if an endpoint is present in the request
 			if r.endpoint != "" {
@@ -540,6 +560,7 @@ func (k *Kubernetes) findServices(r recordRequest, zone string) (services []msg.
 		}
 
 		// Endpoint query or headless service
+		// 如果 service 是 headless 类型, 则返回 service endoptins 地址集.
 		if svc.Headless() || r.endpoint != "" {
 			if endpointsList == nil {
 				endpointsList = endpointsListFunc()
@@ -577,6 +598,7 @@ func (k *Kubernetes) findServices(r recordRequest, zone string) (services []msg.
 		}
 
 		// ClusterIP service
+		// 如果 service 类型是 ClusterIP, 则返回 clusterIP 这个 vip.
 		for _, p := range svc.Ports {
 			if !(matchPortAndProtocol(r.port, p.Name, r.protocol, string(p.Protocol))) {
 				continue

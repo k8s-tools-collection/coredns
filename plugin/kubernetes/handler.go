@@ -28,6 +28,7 @@ func (k Kubernetes) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.M
 		err       error
 	)
 
+	// plugin.XXX 方法会把 msg.Service 结构体转成真正的 dns 记录结构体,
 	switch state.QType() {
 	case dns.TypeA:
 		records, truncated, err = plugin.A(ctx, &k, zone, state, nil, plugin.Options{})
@@ -80,12 +81,15 @@ func (k Kubernetes) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.M
 		return plugin.BackendError(ctx, &k, zone, dns.RcodeSuccess, state, nil, plugin.Options{})
 	}
 
+	// 返回写入 dns reply
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Truncated = truncated
 	m.Authoritative = true
 	m.Answer = append(m.Answer, records...)
 	m.Extra = append(m.Extra, extra...)
+	//附带 buffer 缓冲的自定义 writer. 等插件的调用链都执行完毕后, 
+	// coredns 会把 buffer 写到 conn 
 	w.WriteMsg(m)
 	return dns.RcodeSuccess, nil
 }

@@ -59,6 +59,7 @@ func (s *Service) NewMX(name string) *dns.MX {
 }
 
 // NewA returns a new A record based on the Service.
+// 创建 A 记录的结构体
 func (s *Service) NewA(name string, ip net.IP) *dns.A {
 	return &dns.A{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: s.TTL}, A: ip}
 }

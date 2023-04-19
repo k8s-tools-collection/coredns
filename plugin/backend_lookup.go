@@ -15,6 +15,7 @@ import (
 
 // A returns A records from Backend or an error.
 func A(ctx context.Context, b ServiceBackend, zone string, state request.Request, previousRecords []dns.RR, opt Options) (records []dns.RR, truncated bool, err error) {
+	// checkForApex 会调用 k8s 插件的 的 Services() 方法, 拿到的是 []msg.Service 记录.
 	services, err := checkForApex(ctx, b, zone, state, opt)
 	if err != nil {
 		return nil, false, err
@@ -23,6 +24,7 @@ func A(ctx context.Context, b ServiceBackend, zone string, state request.Request
 	dup := make(map[string]struct{})
 
 	for _, serv := range services {
+		// what 为 dns type, ip 就是 ip 地址.
 		what, ip := serv.HostType()
 
 		switch what {
@@ -74,8 +76,10 @@ func A(ctx context.Context, b ServiceBackend, zone string, state request.Request
 			continue
 
 		case dns.TypeA:
+			// 使用 dup 表过滤掉相同的 host, 这里的 serv.Host 说的是 ip 地址.
 			if _, ok := dup[serv.Host]; !ok {
 				dup[serv.Host] = struct{}{}
+				// 返回类型为 A 记录类型, 且值为 ip 地址.
 				records = append(records, serv.NewA(state.QName(), ip))
 			}
 

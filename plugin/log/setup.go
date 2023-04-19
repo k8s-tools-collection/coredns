@@ -12,6 +12,7 @@ import (
 	"github.com/miekg/dns"
 )
 
+// 注册 log 插件, 把 log 的 setup 装载方法注册进去.
 func init() { plugin.Register("log", setup) }
 
 func setup(c *caddy.Controller) error {
@@ -20,6 +21,7 @@ func setup(c *caddy.Controller) error {
 		return plugin.Error("log", err)
 	}
 
+	// Logger 实现了 plugin.Handler 接口了, 注册一个 plugin.Plugin 方法.
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
 		return Logger{Next: next, Rules: rules, repl: replacer.New()}
 	})

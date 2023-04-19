@@ -108,6 +108,7 @@ type dnsControlOpts struct {
 
 // newdnsController creates a controller for CoreDNS.
 func newdnsController(ctx context.Context, kubeClient kubernetes.Interface, opts dnsControlOpts) *dnsControl {
+	// 自定义 dns controller 控制器对象
 	dns := dnsControl{
 		client:            kubeClient,
 		selector:          opts.selector,
@@ -117,17 +118,21 @@ func newdnsController(ctx context.Context, kubeClient kubernetes.Interface, opts
 		endpointNameMode:  opts.endpointNameMode,
 	}
 
+	// 实例化 service 资源的 informer 对象, 自定义 list 和 watch 的筛选方法.
 	dns.svcLister, dns.svcController = object.NewIndexerInformer(
 		&cache.ListWatch{
 			ListFunc:  serviceListFunc(ctx, dns.client, api.NamespaceAll, dns.selector),
 			WatchFunc: serviceWatchFunc(ctx, dns.client, api.NamespaceAll, dns.selector),
 		},
+		// 指定 service 资源类型
 		&api.Service{},
+		// 向 informer 注册 eventHandler 回调方法
 		cache.ResourceEventHandlerFuncs{AddFunc: dns.Add, UpdateFunc: dns.Update, DeleteFunc: dns.Delete},
+		// 注册 cache 的 index 方法
 		cache.Indexers{svcNameNamespaceIndex: svcNameNamespaceIndexFunc, svcIPIndex: svcIPIndexFunc, svcExtIPIndex: svcExtIPIndexFunc},
 		object.DefaultProcessor(object.ToService, nil),
 	)
-
+	// 实例化 pod infromer, 默认不开启
 	if opts.initPodCache {
 		dns.podLister, dns.podController = object.NewIndexerInformer(
 			&cache.ListWatch{
@@ -141,6 +146,7 @@ func newdnsController(ctx context.Context, kubeClient kubernetes.Interface, opts
 		)
 	}
 
+	// 实例化 endpoints infromer
 	if opts.initEndpointsCache {
 		dns.epLock.Lock()
 		dns.epLister, dns.epController = object.NewIndexerInformer(
@@ -148,6 +154,7 @@ func newdnsController(ctx context.Context, kubeClient kubernetes.Interface, opts
 				ListFunc:  endpointSliceListFunc(ctx, dns.client, api.NamespaceAll, dns.selector),
 				WatchFunc: endpointSliceWatchFunc(ctx, dns.client, api.NamespaceAll, dns.selector),
 			},
+			// 定义 endpoints 资源
 			&discovery.EndpointSlice{},
 			cache.ResourceEventHandlerFuncs{AddFunc: dns.Add, UpdateFunc: dns.Update, DeleteFunc: dns.Delete},
 			cache.Indexers{epNameNamespaceIndex: epNameNamespaceIndexFunc, epIPIndex: epIPIndexFunc},
@@ -156,6 +163,7 @@ func newdnsController(ctx context.Context, kubeClient kubernetes.Interface, opts
 		dns.epLock.Unlock()
 	}
 
+	// 实例化 namespace infromer
 	dns.nsLister, dns.nsController = object.NewIndexerInformer(
 		&cache.ListWatch{
 			ListFunc:  namespaceListFunc(ctx, dns.client, dns.namespaceSelector),
@@ -600,16 +608,22 @@ func (dns *dnsControl) detectChanges(oldObj, newObj interface{}) {
 	}
 	switch ob := obj.(type) {
 	case *object.Service:
+		// 获取需要更新哪些时间戳
 		imod, emod := serviceModified(oldObj, newObj)
 		if imod {
+			// 更新时间戳
 			dns.updateModified()
 		}
+		// 当 service 含有 externalIPs 时, 修改 extModified 时间戳.
 		if emod {
+			// 更新 ext 时间戳
 			dns.updateExtModifed()
 		}
 	case *object.Pod:
+		// 更新时间戳
 		dns.updateModified()
 	case *object.Endpoints:
+		// 只有 endpoints 地址变更时才更新时间戳
 		if !endpointsEquivalent(oldObj.(*object.Endpoints), newObj.(*object.Endpoints)) {
 			dns.updateModified()
 		}
@@ -743,12 +757,14 @@ func (dns *dnsControl) Modified(external bool) int64 {
 }
 
 // updateModified set dns.modified to the current time.
+// 把当前时间戳更新到 modified 里.
 func (dns *dnsControl) updateModified() {
 	unix := time.Now().Unix()
 	atomic.StoreInt64(&dns.modified, unix)
 }
 
 // updateExtModified set dns.extModified to the current time.
+// 把当前时间戳更新到 modified 里.
 func (dns *dnsControl) updateExtModifed() {
 	unix := time.Now().Unix()
 	atomic.StoreInt64(&dns.extModified, unix)

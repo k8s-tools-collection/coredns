@@ -104,6 +104,7 @@ func NewServer(addr string, group []*Config) (*Server, error) {
 		}
 
 		// compile custom plugin for everything
+		//  倒序遍历已注册的 plugin 构建 pluginChain 调用链.
 		var stack plugin.Handler
 		for i := len(site.Plugin) - 1; i >= 0; i-- {
 			stack = site.Plugin[i](stack)
@@ -129,6 +130,7 @@ func NewServer(addr string, group []*Config) (*Server, error) {
 				s.classChaos = true
 			}
 		}
+		// 赋值 plugin 调用链
 		site.pluginChain = stack
 	}
 
@@ -170,15 +172,18 @@ func (s *Server) Serve(l net.Listener) error {
 
 // ServePacket starts the server with an existing packetconn. It blocks until the server stops.
 // This implements caddy.UDPServer interface.
+// 启动 dns server, 并启动 udp server
 func (s *Server) ServePacket(p net.PacketConn) error {
 	s.m.Lock()
 	s.server[udp] = &dns.Server{PacketConn: p, Net: "udp", Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 		ctx := context.WithValue(context.Background(), Key{}, s)
 		ctx = context.WithValue(ctx, LoopKey{}, 0)
+		// 调用 ServeDns 方法
 		s.ServeDNS(ctx, w, r)
 	}), TsigSecret: s.tsigSecret}
 	s.m.Unlock()
 
+	// 启动监听
 	return s.server[udp].ActivateAndServe()
 }
 
@@ -278,6 +283,8 @@ func (s *Server) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 		return
 	}
 
+	// 判断 edns 判断, edns 是个很厉害的功能, 没有 edns 之前, gslb 拿到的只是 dns server 地址, 拿不到用户地址.
+	// 而使用 edns 开放协议后, gslb 可以拿到用户的地址. 这样的流量调度才更加准确.
 	if m, err := edns.Version(r); err != nil { // Wrong EDNS version, return at once.
 		w.WriteMsg(m)
 		return
@@ -294,8 +301,10 @@ func (s *Server) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 	)
 
 	for {
+		// 遍历每个 zone
 		if z, ok := s.zones[q[off:]]; ok {
 			for _, h := range z {
+				// 执行 plugin 插件调用链, 调用每个插件的 ServeDNS 方法.
 				if h.pluginChain == nil { // zone defined, but has not got any plugins
 					errorAndMetricsFunc(s.Addr, w, r, dns.RcodeRefused)
 					return
